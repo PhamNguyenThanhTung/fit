@@ -1,0 +1,138 @@
+# Fitness App — backend stack (wger) cho LOCAL DEVELOPMENT
+#
+# Tham chiếu: https://github.com/wger-project/docker (docker-compose.yml + services/*.yaml)
+# Bản này được rút gọn theo spec: chỉ web / db / cache / celery, expose 8000 ra localhost.
+# Khác biệt so với setup production chính thức của wger (có chủ ý, xem README mục 4):
+#   - Không có service nginx  -> web nói trực tiếp ra port 8000
+#   - Không có service powersync (chỉ cần cho sync offline của mobile app)
+#   - Redis dùng config mặc định của image, không mount redis.conf
+
+services:
+  web:
+    image: docker.io/wger/server:2.6.0
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    volumes:
+      - static:/home/wger/static
+      - media:/home/wger/media
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000"]
+      interval: 10s
+      timeout: 5s
+      start_period: 300s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    restart: unless-stopped
+
+  db:
+    image: docker.io/postgres:15-alpine
+    env_file:
+      - .env
+    shm_size: 256mb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data/
+    expose:
+      - 5432
+    command:
+      [
+        "postgres",
+        "-c", "wal_level=logical",
+        "-c", "shared_buffers=256MB",
+        "-c", "effective_cache_size=768MB",
+        "-c", "work_mem=8MB",
+        "-c", "random_page_cost=1.1",
+        "-c", "max_connections=30",
+      ]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "5"
+    restart: unless-stopped
+
+  cache:
+    image: docker.io/redis:7-alpine
+    expose:
+      - 6379
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    restart: unless-stopped
+
+  celery_worker:
+    image: docker.io/wger/server:2.6.0
+    command: /start-worker
+    env_file:
+      - .env
+    volumes:
+      - media:/home/wger/media
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "celery", "-A", "wger", "inspect", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    restart: unless-stopped
+
+  celery_beat:
+    image: docker.io/wger/server:2.6.0
+    command: /start-beat
+    env_file:
+      - .env
+    volumes:
+      - celery-beat:/home/wger/beat/
+    depends_on:
+      celery_worker:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  celery-beat:
+  static:
+  media:
+
+networks:
+  default:
+    name: fit_backend_network

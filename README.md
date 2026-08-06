@@ -14,6 +14,7 @@ fit/
 ├── backend/            # REST API backend — chạy mã nguồn mở wger qua Docker
 ├── cv-service/         # Computer Vision service (PyTorch / YOLO) — chưa implement
 ├── chatbot-service/    # Chatbot service (Qwen / Transformer) — chưa implement
+├── docs/               # Tài liệu thiết kế (UI brief, spec phụ trợ)
 ├── docker-compose.yml  # Orchestration cho backend stack
 ├── .env.example        # Template biến môi trường (commit)
 ├── .env                # Biến môi trường local dev (KHÔNG commit)
@@ -89,6 +90,7 @@ Các biến quan trọng:
 | `SECRET_KEY` | Khoá ký session/CSRF của Django. Để trống → sinh mới mỗi lần restart, session bị vô hiệu hoá |
 | `SITE_URL` | URL gốc, ảnh hưởng link trong email và API response |
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | Container `db` đọc trực tiếp để khởi tạo DB lần đầu |
+| `PS_DATABASE_URI` | Chuỗi kết nối Django dùng để nói chuyện với Postgres. **Thiếu biến này wger âm thầm fallback sang SQLite** — data ghi vào file trong container, mất khi recreate. Đổi `POSTGRES_*` ở trên thì phải sửa cả URI |
 | `DJANGO_CACHE_LOCATION` | Redis DB 1 cho cache Django |
 | `CELERY_BROKER` / `_BACKEND` | Redis DB 2 cho queue Celery |
 | `WGER_INSTANCE` | Instance nguồn để đồng bộ exercise (mục 4.3) |
@@ -197,3 +199,48 @@ docker compose down -v  # xoá volume, mất toàn bộ data DB
 | 3 | `cv-service`: đếm rep + đánh giá form động tác | Chưa bắt đầu |
 | 4 | `chatbot-service`: trợ lý hội thoại | Chưa bắt đầu |
 | 5 | Deployment: hardening secret, HTTPS, CI/CD | Chưa bắt đầu |
+
+---
+
+## 6. TODO — việc cần làm khi tới từng giai đoạn
+
+- **Trước Giai đoạn 3 (`cv-service`)** — kiểm tra dung lượng ổ trước khi build image CV.
+  Base image PyTorch (+ CUDA nếu dùng GPU) và YOLO weights có thể chiếm 5–10GB.
+  Xem mục 7.
+- **Trước Giai đoạn 4 (auth cho `chatbot-service`)** — sinh JWT signing keys:
+
+  ```bash
+  docker compose exec web python3 manage.py generate-jwt-keys
+  ```
+
+  `chatbot-service` gọi REST API của `backend` bằng token, nên cần key trước khi
+  implement luồng auth. Chưa cần bây giờ vì các endpoint đang dùng đều không auth.
+- **Trước Giai đoạn 5 (deploy)** — checklist hardening secret ở cuối mục 3.
+
+---
+
+## 7. Dung lượng ổ đĩa & Docker
+
+Docker Desktop trên Windows lưu toàn bộ image/volume trong một file ảo duy nhất:
+
+```
+%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx
+```
+
+File này nằm trên **ổ C (ổ hệ thống)**. Nếu ổ C đầy, WSL2 crash và kéo theo toàn bộ
+Docker stack — không chỉ mất container mà có thể hỏng cả distro.
+
+Kiểm tra định kỳ:
+
+```bash
+docker system df            # image / container / volume / build cache đang chiếm bao nhiêu
+docker image prune -a       # xoá image không container nào dùng
+docker builder prune        # xoá build cache
+```
+
+> `docker image prune -a` xoá mọi image không được container nào tham chiếu, kể cả
+> image còn muốn dùng lại sau. Chạy `docker images` xem trước khi prune.
+
+Nếu ổ C sắp đầy: chuyển `docker_data.vhdx` sang ổ khác qua Docker Desktop →
+Settings → Resources → Advanced → *Disk image location*. Docker Desktop tự move file
+(tắt hết container trước, quá trình mất vài phút).
